@@ -24,7 +24,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 # 로깅 설정
-logging.basicConfig(filename='cnn_training_log.txt', level=logging.INFO,
+logging.basicConfig(filename='resnet_training_log.txt', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 # GPU 설정
@@ -199,7 +199,7 @@ def train_model(num_epochs=100, early_stopping_patience=8):
     logging.info(f"최종 훈련 정확도: {final_train_acc}")
     logging.info(f"최종 검증 정확도: {final_val_acc}")
 
-    with open('cnn_training_history.json', 'w') as f:
+    with open('resnet_training_history.json', 'w') as f:
         json.dump(history, f)
 
     plot_learning_curves(history, len(history['train_loss']))

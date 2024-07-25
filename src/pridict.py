@@ -46,17 +46,30 @@ model.eval()
 print("Model loaded successfully")
 
 def preprocess_image(image):
+    # 이미지를 RGB로 변환
+    image = image.convert('RGB')
+
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-    return transform(image).unsqueeze(0)
+
+    # 예외 처리 추가
+    try:
+        tensor = transform(image).unsqueeze(0)
+        if tensor.shape[1] != 3:
+            raise ValueError(f"Expected 3 channels, got {tensor.shape[1]}")
+        return tensor
+    except Exception as e:
+        print(f"Error in preprocess_image: {e}")
+        # 오류 발생 시 기본 텐서 반환
+        return torch.zeros((1, 3, 224, 224), device=device)
 
 WEIGHT_PER_PIXEL = {
     'PP': 0.00005,
-    'PE': 0.00003,
-    'PS': 0.000016
+    'PE': 0.00023,
+    'PS': 0.00002
 }
 
 def detect_object(image):
@@ -90,98 +103,102 @@ def detect_object(image):
     return 0, 0, img_np.shape[1], img_np.shape[0]
 
 def process_single_image(file):
-    file_contents = file.read()
-    image = Image.open(BytesIO(file_contents))
-    original_width, original_height = image.size
-
-    # 객체 탐지
-    x, y, w, h = detect_object(image)
-
-    # 객체 영역 추출
-    object_image = image.crop((x, y, x+w, y+h))
-
-    # 모델 예측
-    input_tensor = preprocess_image(object_image)
-    with torch.no_grad():
-        output = model(input_tensor)
-
-    _, predicted = torch.max(output, 1)
-    class_index = predicted.item()
-    class_names = ['PP', 'PE', 'PS']
-    predicted_class = class_names[class_index]
-
-    # 픽셀 영역 계산
-    pixel_area = w * h
-
-    estimated_weight = pixel_area * WEIGHT_PER_PIXEL[predicted_class]
-
-    # 결과 이미지 생성
-    draw = ImageDraw.Draw(image)
-    draw.rectangle([x, y, x + w, y + h], outline="red", width=3)
-
-    # 폰트 설정
     try:
-        font = ImageFont.truetype("arial.ttf", 40)
-    except IOError:
-        font = ImageFont.load_default()
+        file_contents = file.read()
+        image = Image.open(BytesIO(file_contents))
+        original_width, original_height = image.size
 
-    # 텍스트 추가
-    text = f"{predicted_class}: {estimated_weight:.2f}g"
-    text_bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = text_bbox[2] - text_bbox[0]
-    text_height = text_bbox[3] - text_bbox[1]
+        # 객체 탐지
+        x, y, w, h = detect_object(image)
 
-    # 텍스트 위치 조정 (이미지 상단에 배치)
-    text_position = (10, 10)
+        # 객체 영역 추출
+        object_image = image.crop((x, y, x+w, y+h))
 
-    # 텍스트 배경 추가
-    draw.rectangle([text_position[0], text_position[1],
-                    text_position[0] + text_width, text_position[1] + text_height],
-                   fill="white")
+        # 모델 예측
+        input_tensor = preprocess_image(object_image)
+        with torch.no_grad():
+            output = model(input_tensor)
 
-    # 텍스트 그리기
-    draw.text(text_position, text, font=font, fill="red")
+        _, predicted = torch.max(output, 1)
+        class_index = predicted.item()
+        class_names = ['PE', 'PP', 'PS', 'unknown']
+        predicted_class = class_names[class_index]
 
-    # 결과 이미지 저장
-    result_image_path = os.path.join(RESULT_FOLDER, f'{file.filename.split(".")[0]}_result.jpg')
-    image.save(result_image_path)
+        # 픽셀 영역 계산
+        pixel_area = w * h
 
-    # 이미지를 바이트로 변환
-    buffered = BytesIO()
-    image.save(buffered, format="JPEG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
+        estimated_weight = pixel_area * WEIGHT_PER_PIXEL.get(predicted_class, 0)
 
-    result = {
-        "version": "4.2.7",
-        "flags": {},
-        "shapes": [
-            {
-                "label": predicted_class,
-                "points": [
-                    [x, y],
-                    [x + w, y],
-                    [x + w, y + h],
-                    [x, y + h]
-                ],
-                "group_id": None,
-                "shape_type": "polygon",
-                "inner": None,
-                "flags": {}
-            }
-        ],
-        "imagePath": file.filename,
-        "imageHeight": original_height,
-        "imageWidth": original_width,
-        "estimatedWeight": estimated_weight,
-        "processedImage": img_str
-    }
+        # 결과 이미지 생성
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([x, y, x + w, y + h], outline="red", width=3)
 
-    # JSON 파일 저장
-    json_path = os.path.join(RESULT_FOLDER, f'{file.filename.split(".")[0]}_result.json')
-    with open(json_path, 'w') as f:
-        json.dump(result, f, indent=2)
+        # 폰트 설정
+        try:
+            font = ImageFont.truetype("arial.ttf", 40)
+        except IOError:
+            font = ImageFont.load_default()
 
-    return result
+        # 텍스트 추가
+        text = f"{predicted_class}: {estimated_weight:.2f}g"
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+
+        # 텍스트 위치 조정 (이미지 상단에 배치)
+        text_position = (10, 10)
+
+        # 텍스트 배경 추가
+        draw.rectangle([text_position[0], text_position[1],
+                        text_position[0] + text_width, text_position[1] + text_height],
+                       fill="white")
+
+        # 텍스트 그리기
+        draw.text(text_position, text, font=font, fill="red")
+
+        # 결과 이미지 저장
+        result_image_path = os.path.join(RESULT_FOLDER, f'{file.filename.split(".")[0]}_result.jpg')
+        image.save(result_image_path)
+
+        # 이미지를 바이트로 변환
+        buffered = BytesIO()
+        image.save(buffered, format="JPEG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+
+        result = {
+            "version": "4.2.7",
+            "flags": {},
+            "shapes": [
+                {
+                    "label": predicted_class,
+                    "points": [
+                        [x, y],
+                        [x + w, y],
+                        [x + w, y + h],
+                        [x, y + h]
+                    ],
+                    "group_id": None,
+                    "shape_type": "polygon",
+                    "inner": None,
+                    "flags": {}
+                }
+            ],
+            "imagePath": file.filename,
+            "imageHeight": original_height,
+            "imageWidth": original_width,
+            "estimatedWeight": estimated_weight,
+            "processedImage": img_str
+        }
+
+        # JSON 파일 저장
+        json_path = os.path.join(RESULT_FOLDER, f'{file.filename.split(".")[0]}_result.json')
+        with open(json_path, 'w') as f:
+            json.dump(result, f, indent=2)
+
+        return result
+    except Exception as e:
+        print(f"Error in process_single_image: {e}")
+        return {"error": str(e)}
 
 @app.route('/predict', methods=['POST'])
 def predict():
